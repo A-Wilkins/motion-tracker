@@ -6,6 +6,7 @@ capture:
   width: 1280
   height: 720
   queue_size: 2        # small on purpose: drop stale frames, never add latency
+  flip: false          # mirror the feed; true is usually right for a front-facing camera
 
 motion:
   enabled: true

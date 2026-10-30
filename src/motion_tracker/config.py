@@ -19,6 +19,10 @@ class CaptureConfig:
     # file sources. Live capture must stay in the present; a file is a fixed
     # set of frames and silently discarding them would corrupt any benchmark.
     drop_stale: bool | str = "auto"
+    # Mirror the feed. A front-facing camera is not mirrored by default, which
+    # reads as wrong when you are the subject. Applied at capture so the boxes
+    # match what is on screen.
+    flip: bool = False
 
 
 @dataclass

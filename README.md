@@ -15,6 +15,35 @@ python -m motion_tracker --mask               # visualise the motion gate
 python -m motion_tracker --no-display         # headless, prints track events
 ```
 
+## Running it live
+
+```bash
+python scripts/check_camera.py                 # confirm the device opens
+python -m motion_tracker --flip                # mirrored, as a front-facing camera should be
+python -m motion_tracker --flip --mask         # plus the motion mask, to tune the gate by eye
+python -m motion_tracker --flip --no-gate      # detect every frame
+```
+
+`q` or `esc` quits, but only while the video window has focus; `ctrl-c` in the
+terminal works either way and still prints the run summary.
+
+Two behaviours that look like bugs on a webcam pointed at yourself and are not:
+
+**You go still, your box disappears.** MOG2 learns a background over
+`motion.history` frames — ten seconds at 30fps. Sit motionless and you become
+background, the gate idles, inference stops, and your track ages out and reports
+`LOST`. Move again and you come back with a *new* track id, because the identity
+was legitimately given up. This is correct for a driveway and wrong for a demo:
+run `--no-gate` if you want stable boxes while you sit at the keyboard.
+
+**Walking out of frame reports `EXITED`, pausing behind something reports
+`LOST`.** That distinction is the point, and the clearest way to see it working
+is to walk off the side of the frame, then to step behind something mid-frame.
+
+The shipped `config.yaml` is tuned for a static scene rather than for a face at
+desk distance. For a self-facing demo, raising `motion.history` keeps you in the
+foreground longer and raising `track.max_age` makes identity survive longer gaps.
+
 ## Design
 
 ```
@@ -110,7 +139,7 @@ Security → Camera, then fully quit and reopen it.
 ## Tests
 
 ```bash
-pytest              # 35 unit tests, no model weights needed
+pytest              # 36 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

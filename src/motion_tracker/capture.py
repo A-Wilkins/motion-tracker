@@ -83,7 +83,7 @@ class VideoSource:
                 f"opened video source {source!r} but the first read failed; the "
                 "device may be in use by another application."
             )
-        self._probe = Frame(0, time.monotonic(), image)
+        self._probe = Frame(0, time.monotonic(), self._orient(image))
         self._frames_read = 1
 
         self._thread = threading.Thread(target=self._pump, name="capture", daemon=True)
@@ -121,12 +121,15 @@ class VideoSource:
                     # End of file, or a transiently unhappy device.
                     self._stop.set()
                     break
-                frame = Frame(self._frames_read, time.monotonic(), image)
+                frame = Frame(self._frames_read, time.monotonic(), self._orient(image))
                 self._frames_read += 1
                 self._offer(frame)
         except BaseException as exc:  # surfaced to the consumer thread
             self._error = exc
             self._stop.set()
+
+    def _orient(self, image: np.ndarray) -> np.ndarray:
+        return cv2.flip(image, 1) if self._cfg.flip else image
 
     def _offer(self, frame: Frame) -> None:
         """Enqueue under the configured backpressure policy."""

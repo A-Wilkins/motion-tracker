@@ -57,3 +57,25 @@ def test_file_source_yields_every_frame_including_the_first(tmp_path):
 def test_failed_open_raises_with_a_useful_message(tmp_path):
     with pytest.raises(CaptureError, match="could not open"):
         VideoSource(CaptureConfig(source=str(tmp_path / "nope.mp4"))).open()
+
+
+def test_flip_mirrors_frames_at_capture(tmp_path):
+    """Mirroring must happen at capture, so detections line up with the view."""
+    path = tmp_path / "sided.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (160, 120))
+    assert writer.isOpened()
+    for _ in range(4):
+        frame = np.zeros((120, 160, 3), dtype=np.uint8)
+        frame[:, :40] = 255          # bright band on the left
+        writer.write(frame)
+    writer.release()
+
+    def left_is_brighter(flip):
+        cfg = CaptureConfig(source=str(path), flip=flip)
+        with VideoSource(cfg) as source:
+            image = next(iter(source)).image
+        half = image.shape[1] // 2
+        return bool(image[:, :half].mean() > image[:, half:].mean())
+
+    assert left_is_brighter(flip=False), "unflipped frame lost its left-side band"
+    assert not left_is_brighter(flip=True), "flip did not mirror the frame"

@@ -25,6 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-display", action="store_true", help="run headless")
     parser.add_argument("--no-gate", action="store_true", help="disable the motion gate")
     parser.add_argument("--mask", action="store_true", help="overlay the motion mask")
+    parser.add_argument("--flip", action="store_true", help="mirror the feed (front-facing camera)")
     parser.add_argument("--max-frames", type=int, help="stop after N frames (for benchmarking)")
     return parser.parse_args(argv)
 
@@ -42,6 +43,8 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.motion.enabled = False
     if args.mask:
         cfg.display.show_motion_mask = True
+    if args.flip:
+        cfg.capture.flip = True
     return cfg
 
 
