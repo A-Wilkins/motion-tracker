@@ -1,0 +1,118 @@
+"""The pipeline: capture -> motion gate -> detect/track -> lifecycle.
+
+Each processed frame yields a Snapshot. A consumer can render it, write it
+to disk, push it to an event store, or ignore it entirely; the pipeline
+itself has no opinion about output and no dependency on a display.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass
+
+import numpy as np
+
+from .capture import Frame, VideoSource
+from .config import Config
+from .detect import Detection, Detector
+from .metrics import Metrics, Timer
+from .motion import MotionGate, MotionResult
+from .track import Track, TrackManager
+
+
+@dataclass
+class Snapshot:
+    frame: Frame
+    motion: MotionResult
+    detections: list[Detection]
+    tracks: list[Track]          # live tracks, tentative and confirmed
+    closed: list[Track]          # tracks that ended on this frame
+    ran_inference: bool
+
+    @property
+    def image(self) -> np.ndarray:
+        return self.frame.image
+
+
+class Pipeline:
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        self.metrics = Metrics()
+        self._source = VideoSource(cfg.capture)
+        self._gate = MotionGate(cfg.motion)
+        self._detector = Detector(cfg.detect, cfg.track.tracker)
+        self._tracks: TrackManager | None = None
+        self._idle_frames = 0
+
+    @property
+    def detector(self) -> Detector:
+        return self._detector
+
+    @property
+    def tracks(self) -> TrackManager:
+        if self._tracks is None:
+            raise RuntimeError("pipeline not started")
+        return self._tracks
+
+    def __enter__(self) -> "Pipeline":
+        self._source.open()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._source.close()
+
+    def run(self) -> Iterator[Snapshot]:
+        warmed = False
+
+        for frame in self._source:
+            height, width = frame.shape
+
+            if self._tracks is None:
+                self._tracks = TrackManager(
+                    self.cfg.track, (height, width), self.cfg.display.trail_length,
+                )
+            if not warmed:
+                self._detector.warmup(width, height)
+                warmed = True
+
+            with Timer(self.metrics.total):
+                with Timer(self.metrics.motion):
+                    motion = self._gate.update(frame.image)
+
+                detections: list[Detection] = []
+                if motion.active:
+                    with Timer(self.metrics.inference):
+                        detections = self._detector.track(frame.image)
+                    self.metrics.inferences += 1
+                    self._idle_frames = 0
+                else:
+                    self._idle_frames += 1
+                    # After a long quiet stretch, stale Kalman predictions are
+                    # worthless and recycled ids would be misleading. Start clean.
+                    if self._idle_frames == self.cfg.track.max_age * 4:
+                        self._detector.reset_tracker()
+
+                closed = self._tracks.update(detections, frame.index, frame.timestamp)
+
+            self.metrics.tick()
+            yield Snapshot(
+                frame=frame,
+                motion=motion,
+                detections=detections,
+                tracks=self._tracks.live,
+                closed=closed,
+                ran_inference=motion.active,
+            )
+
+    # -- convenience --------------------------------------------------
+
+    def hud_lines(self, snapshot: Snapshot) -> list[str]:
+        gate = "ACTIVE" if snapshot.ran_inference else "idle"
+        return [
+            f"{self.metrics.fps:5.1f} fps   {self._detector.device}   {self.cfg.detect.weights}",
+            f"gate {gate}   motion {snapshot.motion.area_frac * 100:4.1f}%   "
+            f"skipped {self.metrics.gate_skip_rate * 100:.0f}%",
+            f"infer {self.metrics.inference.mean:5.1f}ms   "
+            f"tracks {len(self.tracks.visible)} live / {self.tracks.total_confirmed} total",
+            f"dropped frames {self._source.frames_dropped}",
+        ]

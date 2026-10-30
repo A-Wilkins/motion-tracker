@@ -1,0 +1,36 @@
+# Runtime configuration for the motion tracker.
+# Everything tunable lives here so the pipeline code stays declarative.
+
+capture:
+  source: 0            # webcam index, or a path/RTSP URL
+  width: 1280
+  height: 720
+  queue_size: 2        # small on purpose: drop stale frames, never add latency
+
+motion:
+  enabled: true
+  scale: 0.25          # analyse at a quarter resolution, it is plenty
+  history: 300         # MOG2 background frames
+  var_threshold: 32
+  min_area_frac: 0.0008  # fraction of frame area a blob must cover to count
+  dilate_iterations: 2
+  cooldown_frames: 12   # keep detecting this long after motion stops
+
+detect:
+  weights: yolo11n.pt
+  conf: 0.35
+  iou: 0.5
+  imgsz: 640
+  device: auto         # auto -> mps on Apple silicon, else cpu
+  classes: [0, 1, 2, 3, 5, 7, 15, 16]  # person, bicycle, car, motorcycle, bus, truck, cat, dog
+
+track:
+  tracker: bytetrack.yaml
+  min_hits: 4          # frames a track must survive before it is "confirmed"
+  max_age: 30          # frames a lost track is retained before deletion
+  edge_margin: 8       # px from frame border that counts as "left the scene"
+
+display:
+  enabled: true
+  show_motion_mask: false
+  trail_length: 48

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motion-tracker"
+version = "0.1.0"
+description = "Real-time motion detection, object identification and multi-object tracking on a webcam feed"
+requires-python = ">=3.10"
+dependencies = [
+    "ultralytics>=8.3.0",
+    "opencv-python>=4.10.0",
+    "pyyaml>=6.0",
+    "lap>=0.5.12",
+]
+
+[project.scripts]
+motion-tracker = "motion_tracker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: loads real weights and runs inference"]
+# Plain `pytest` stays fast and weightless; `pytest -m slow` runs end-to-end.
+addopts = "-m 'not slow'"
