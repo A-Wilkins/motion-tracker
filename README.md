@@ -27,6 +27,11 @@ python -m motion_tracker --flip --no-gate      # detect every frame
 `q` or `esc` quits, but only while the video window has focus; `ctrl-c` in the
 terminal works either way and still prints the run summary.
 
+On a 30 fps camera the pipeline is camera-bound, not compute-bound: it holds the
+full 30 fps with the gate on and drops 2–4% of frames. Expect the HUD's gate
+indicator to sit on ACTIVE whenever you are moving and fall to idle within about
+half a second of stillness.
+
 Two behaviours that look like bugs on a webcam pointed at yourself and are not:
 
 **You go still, your box disappears.** MOG2 learns a background over
@@ -93,35 +98,57 @@ and a surveillance system that reports noise as events is worse than useless.
 
 ## Measured
 
-M1 MacBook, 1280x720, YOLO11n on MPS, over the 130-frame fixture clip. Median of
-three runs, range in brackets — a laptop under thermal management is noisy
-enough that a single run should not be quoted.
+M1 MacBook, 1280x720, YOLO11n on MPS. Median of three runs, range in brackets.
+Throughput excludes startup — loading weights and compiling GPU kernels is a
+one-off cost and charging it to the frame rate understates steady state.
+
+### Recorded source, 130-frame fixture — compute-bound
 
 | | gate on | gate off |
 |---|---|---|
-| frames processed | 130 | 130 |
 | inferences run | 89 | 130 |
 | frames skipped | 31.5% | 0% |
-| end-to-end | **33.2 fps** [26.6–35.5] | 27.2 fps [26.3–29.3] |
-| motion gate | 1.3 ms | — |
-| inference, mean | 24.7 ms | 21.4 ms |
+| throughput | **49.1 fps** [43.1–49.3] | 40.2 fps [39.7–41.3] |
+| per-frame pipeline cost | 10.8 ms | 22.4 ms |
+| inference, mean | 24.7 ms | 22.4 ms |
 
-Frame and inference counts are deterministic; throughput is not. Call it a ~1.2x
-median speedup, which is about what skipping 31.5% of an inference-dominated
+With nothing throttling input, the gate converts avoided inference directly into
+throughput: ~1.22x, which is about what skipping 31.5% of an inference-bound
 pipeline should buy.
 
-Note the inversion in the last row: mean inference is *higher* with the gate on.
-That is not noise. Gating means the detector only ever sees frames that contain
-something, while the ungated run dilutes its average with empty frames that are
-cheap to post-process. The gate's win is in how many inferences it avoids, not
-in making any one of them faster — and a benchmark that only reported mean
-inference latency would have shown the gate making things worse.
+### Live webcam, 30 fps — camera-bound
 
-The fixture is idle for roughly a third of its length and the gate recovers
-almost exactly that. On a real scene — a doorway, a driveway — idle time is the
-overwhelming majority of the footage and the saving is correspondingly larger.
-Reproduce with `python -m motion_tracker --source assets/test_clip.mp4
---no-display [--no-gate]`.
+| | gate on | gate off |
+|---|---|---|
+| inferences run | 9–82% skipped, scene-dependent | 0% skipped |
+| throughput | **30.2 fps** [29.9–30.4] | 27.9 fps [26.9–28.0] |
+| frames dropped | 2–4% | 7–14% |
+| inference, mean | 27.1 ms | 27.0–37.7 ms |
+
+This is the more honest number and it says something different. A 30 fps camera
+cannot be outrun, so the gate does not buy throughput here — it buys *headroom*.
+Gated, the pipeline holds the full frame rate and discards almost nothing.
+Ungated it cannot quite keep up, falls to ~28 fps, and drops 7–14% of frames to
+stay current. Skip rate swings from 9% to 82% between runs purely on how much
+was moving, which is the gate working as intended rather than measurement noise.
+
+Note the one place the gate looks worse: mean inference is slightly *higher* with
+it on. That is not noise. Gating means the detector only ever sees frames with
+something in them, while the ungated average is diluted by empty frames that are
+cheap to post-process. The win is in how many inferences are avoided, not in
+making any one faster — a benchmark reporting only mean inference latency would
+have concluded the gate made things worse.
+
+Reproduce:
+
+```bash
+python -m motion_tracker --source assets/test_clip.mp4 --no-display [--no-gate]
+python -m motion_tracker --source 0 --no-display --max-frames 200 [--no-gate]
+```
+
+The summary line reports `fps=<run mean> (now <rolling>)`, per-stage latency,
+`wait` (time blocked on capture, which is the gap between what the pipeline
+costs and what it delivers), and dropped frames for live sources.
 
 ## Setup
 
@@ -132,14 +159,27 @@ python scripts/check_camera.py          # verify camera access
 python -m motion_tracker
 ```
 
-On macOS, camera access is granted per application. If `check_camera.py` reports
-no usable device, enable your terminal under System Settings → Privacy &
-Security → Camera, then fully quit and reopen it.
+On macOS, camera access is granted to the **application that owns your shell**,
+not to the shell itself. In an editor's integrated terminal that is the editor,
+so the entry to look for under System Settings → Privacy & Security → Camera is
+VS Code or Cursor, not "python" or "zsh".
+
+An app only appears in that list once it has requested access, and it can only
+request access if its `Info.plist` declares `NSCameraUsageDescription`.
+**Terminal.app does not declare it**, so a camera request from Terminal.app is
+denied without ever prompting and Terminal will never show up there. Use an
+editor's integrated terminal or iTerm2 instead.
+
+The prompt only appears for a foreground, interactive run, so run
+`check_camera.py` yourself rather than through any sandboxed or automated
+wrapper. If access was denied once before, clear the stale decision first with
+`tccutil reset Camera <bundle-id>` — `check_camera.py` prints the exact command
+for your setup.
 
 ## Tests
 
 ```bash
-pytest              # 36 unit tests, no model weights needed
+pytest              # 41 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

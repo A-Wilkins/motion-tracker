@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.max_frames and pipeline.metrics.frames >= args.max_frames:
                     break
 
-            print(pipeline.metrics.summary(), file=sys.stderr)
+            print(pipeline.summary(), file=sys.stderr)
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
     finally:

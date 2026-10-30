@@ -50,17 +50,24 @@ class Timer:
 
 class Metrics:
     def __init__(self, window: int = 60) -> None:
+        self.wait = Stat(window, deque(maxlen=window))
         self.motion = Stat(window, deque(maxlen=window))
         self.inference = Stat(window, deque(maxlen=window))
         self.total = Stat(window, deque(maxlen=window))
         self._frame_times: deque[float] = deque(maxlen=window)
         self.frames = 0
         self.inferences = 0
-        self._started = time.perf_counter()
+        # Started on the first processed frame, not at construction. Loading
+        # weights, warming up the GPU and opening the camera are startup costs;
+        # charging them to the frame rate understates steady-state throughput.
+        self._started: float | None = None
 
     def tick(self) -> None:
+        now = time.perf_counter()
+        if self._started is None:
+            self._started = now
         self.frames += 1
-        self._frame_times.append(time.perf_counter())
+        self._frame_times.append(now)
 
     @property
     def fps(self) -> float:
@@ -78,13 +85,23 @@ class Metrics:
 
     @property
     def elapsed_s(self) -> float:
+        """Wall time spent processing frames, excluding startup."""
+        if self._started is None:
+            return 0.0
         return time.perf_counter() - self._started
+
+    @property
+    def throughput(self) -> float:
+        """Mean frames per second across the whole run, excluding startup."""
+        return self.frames / self.elapsed_s if self.elapsed_s > 0 else 0.0
 
     def summary(self) -> str:
         return (
             f"frames={self.frames} inferences={self.inferences} "
             f"gate_skip={self.gate_skip_rate * 100:.1f}% "
-            f"fps={self.frames / self.elapsed_s:.1f} "
+            f"fps={self.throughput:.1f} (now {self.fps:.1f}) "
             f"motion={self.motion.mean:.2f}ms "
-            f"infer={self.inference.mean:.1f}ms (p95 {self.inference.p95:.1f}ms)"
+            f"infer={self.inference.mean:.1f}ms (p95 {self.inference.p95:.1f}ms) "
+            f"stage_total={self.total.mean:.1f}ms "
+            f"wait={self.wait.mean:.1f}ms"
         )

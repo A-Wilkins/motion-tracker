@@ -49,12 +49,31 @@ class Pipeline:
         return self._detector
 
     @property
+    def frames_dropped(self) -> int:
+        """Frames the capture thread discarded to stay current (live sources)."""
+        return self._source.frames_dropped
+
+    def summary(self) -> str:
+        """Run summary, including the live-source numbers metrics cannot see."""
+        line = self.metrics.summary()
+        dropped = self._source.frames_dropped
+        if self._source.drops_stale_frames:
+            total = self.metrics.frames + dropped
+            share = dropped / total * 100 if total else 0.0
+            line += f" dropped={dropped} ({share:.0f}% of captured)"
+        return line
+
+    @property
     def tracks(self) -> TrackManager:
         if self._tracks is None:
             raise RuntimeError("pipeline not started")
         return self._tracks
 
     def __enter__(self) -> "Pipeline":
+        # Warm up before the camera starts producing. The first inference pays
+        # for GPU kernel compilation, and anything the capture thread emits
+        # during that window would be dropped unused.
+        self._detector.warmup(self.cfg.capture.width, self.cfg.capture.height)
         self._source.open()
         return self
 
@@ -62,19 +81,19 @@ class Pipeline:
         self._source.close()
 
     def run(self) -> Iterator[Snapshot]:
-        warmed = False
-
-        for frame in self._source:
+        while True:
+            # Timed explicitly: time spent blocked here is the gap between
+            # what the pipeline costs and what it actually delivers.
+            with Timer(self.metrics.wait):
+                frame = self._source.read()
+            if frame is None:
+                return
             height, width = frame.shape
 
             if self._tracks is None:
                 self._tracks = TrackManager(
                     self.cfg.track, (height, width), self.cfg.display.trail_length,
                 )
-            if not warmed:
-                self._detector.warmup(width, height)
-                warmed = True
-
             with Timer(self.metrics.total):
                 with Timer(self.metrics.motion):
                     motion = self._gate.update(frame.image)
