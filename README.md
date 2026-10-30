@@ -98,7 +98,7 @@ Reproduce with `python -m motion_tracker --source assets/test_clip.mp4
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"                 # drop [dev] to skip the test deps
 python scripts/check_camera.py          # verify camera access
 python -m motion_tracker
 ```

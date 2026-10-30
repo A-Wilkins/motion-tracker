@@ -14,6 +14,9 @@ dependencies = [
     "lap>=0.5.12",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 motion-tracker = "motion_tracker.cli:main"
 
