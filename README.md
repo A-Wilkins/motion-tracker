@@ -28,7 +28,7 @@ python -m motion_tracker --flip --no-gate      # detect every frame
 terminal works either way and still prints the run summary.
 
 On a 30 fps camera the pipeline is camera-bound, not compute-bound: it holds the
-full 30 fps with the gate on and drops 2–4% of frames. Expect the HUD's gate
+camera's full rate with the gate on and drops 2–7% of frames. Expect the HUD's gate
 indicator to sit on ACTIVE whenever you are moving and fall to idle within about
 half a second of stillness.
 
@@ -100,7 +100,8 @@ and a surveillance system that reports noise as events is worse than useless.
 
 M1 MacBook, 1280x720, YOLO11n on MPS. Median of three runs, range in brackets.
 Throughput excludes startup — loading weights and compiling GPU kernels is a
-one-off cost and charging it to the frame rate understates steady state.
+one-off cost, and charging it to the frame rate understates steady state. Rates
+divide by intervals rather than by frames, since N frames span N-1 gaps.
 
 ### Recorded source, 130-frame fixture — compute-bound
 
@@ -108,29 +109,28 @@ one-off cost and charging it to the frame rate understates steady state.
 |---|---|---|
 | inferences run | 89 | 130 |
 | frames skipped | 31.5% | 0% |
-| throughput | **49.1 fps** [43.1–49.3] | 40.2 fps [39.7–41.3] |
+| throughput | **51.2 fps** [49.1–52.3] | 38.0 fps [37.0–39.3] |
 | per-frame pipeline cost | 10.8 ms | 22.4 ms |
-| inference, mean | 24.7 ms | 22.4 ms |
 
-With nothing throttling input, the gate converts avoided inference directly into
-throughput: ~1.22x, which is about what skipping 31.5% of an inference-bound
-pipeline should buy.
+With nothing throttling input, avoided inference converts directly into
+throughput: ~1.35x.
 
 ### Live webcam, 30 fps — camera-bound
 
 | | gate on | gate off |
 |---|---|---|
-| inferences run | 9–82% skipped, scene-dependent | 0% skipped |
-| throughput | **30.2 fps** [29.9–30.4] | 27.9 fps [26.9–28.0] |
-| frames dropped | 2–4% | 7–14% |
-| inference, mean | 27.1 ms | 27.0–37.7 ms |
+| frames skipped | 37–59%, scene-dependent | 0% |
+| throughput | 29.7 fps [29.3–30.1] | 29.8 fps [25.2–29.8] |
+| frames dropped | **2–7%** | 3–17% |
+| inference p95 | **36–39 ms** | 27–88 ms |
 
-This is the more honest number and it says something different. A 30 fps camera
-cannot be outrun, so the gate does not buy throughput here — it buys *headroom*.
-Gated, the pipeline holds the full frame rate and discards almost nothing.
-Ungated it cannot quite keep up, falls to ~28 fps, and drops 7–14% of frames to
-stay current. Skip rate swings from 9% to 82% between runs purely on how much
-was moving, which is the gate working as intended rather than measurement noise.
+Here the gate buys no median throughput at all, and claiming otherwise would be
+wrong: a 30 fps camera cannot be outrun, so both configurations sit on the
+camera's ceiling. What separates them is the tail. Ungated, one run in three fell
+to 25.2 fps with an 88 ms p95 and dropped 17% of frames; gated runs stayed within
+29.3–30.1 fps and dropped 2–7% while skipping 37–59% of inferences outright.
+Three runs cannot separate the medians and the ranges overlap, so the defensible
+claim is reduced compute and a tighter worst case — not a faster camera.
 
 Note the one place the gate looks worse: mean inference is slightly *higher* with
 it on. That is not noise. Gating means the detector only ever sees frames with
@@ -146,9 +146,9 @@ python -m motion_tracker --source assets/test_clip.mp4 --no-display [--no-gate]
 python -m motion_tracker --source 0 --no-display --max-frames 200 [--no-gate]
 ```
 
-The summary line reports `fps=<run mean> (now <rolling>)`, per-stage latency,
-`wait` (time blocked on capture, which is the gap between what the pipeline
-costs and what it delivers), and dropped frames for live sources.
+The summary reports `fps=<run mean> (now <rolling>)`, per-stage latency, `wait`
+(time blocked on capture, which is the gap between what the pipeline costs and
+what it delivers), and dropped frames for live sources.
 
 ## Setup
 
@@ -179,7 +179,7 @@ for your setup.
 ## Tests
 
 ```bash
-pytest              # 41 unit tests, no model weights needed
+pytest              # 43 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

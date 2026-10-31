@@ -2,23 +2,68 @@
 
 import time
 
+import pytest
+
 from motion_tracker.metrics import Metrics, Stat, Timer
 
 
-def test_throughput_excludes_startup_cost():
+class FakeClock:
+    """Deterministic stand-in for perf_counter, so rates are exact."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_throughput_excludes_startup_cost(monkeypatch):
     """Regression: elapsed once started at construction, so model loading and
     GPU warmup were charged against the frame rate and understated it."""
+    clock = FakeClock()
+    monkeypatch.setattr("motion_tracker.metrics.time.perf_counter", clock)
+
     metrics = Metrics()
-    time.sleep(0.25)              # stands in for loading weights
+    clock.advance(2.5)            # stands in for loading weights and warmup
     assert metrics.elapsed_s == 0.0
     assert metrics.throughput == 0.0
 
     for _ in range(5):
         metrics.tick()
-        time.sleep(0.01)
+        clock.advance(0.01)
 
-    assert metrics.elapsed_s < 0.2, "startup time leaked into elapsed"
-    assert metrics.throughput > 25, f"throughput {metrics.throughput:.1f} too low"
+    assert metrics.elapsed_s == pytest.approx(0.05), "startup time leaked into elapsed"
+
+
+def test_throughput_divides_by_intervals_not_frames(monkeypatch):
+    """Regression: N frames span N-1 intervals, and the clock starts when the
+    first frame finishes. Dividing by N inflated short runs badly."""
+    clock = FakeClock()
+    monkeypatch.setattr("motion_tracker.metrics.time.perf_counter", clock)
+
+    metrics = Metrics()
+    for i in range(5):
+        metrics.tick()
+        if i < 4:
+            clock.advance(0.01)   # 4 intervals of 10ms between 5 frames
+
+    # 4 intervals over 0.04s is exactly 100 fps. Dividing 5 frames by the same
+    # span would read 125 - a 25% overstatement.
+    assert metrics.throughput == pytest.approx(100.0)
+    assert metrics.fps == pytest.approx(100.0), "fps and throughput should agree"
+
+
+def test_a_single_frame_has_no_measurable_rate(monkeypatch):
+    clock = FakeClock()
+    monkeypatch.setattr("motion_tracker.metrics.time.perf_counter", clock)
+    metrics = Metrics()
+    metrics.tick()
+    clock.advance(0.5)
+    assert metrics.throughput == 0.0
+    assert metrics.fps == 0.0
 
 
 def test_gate_skip_rate_tracks_avoided_inferences():

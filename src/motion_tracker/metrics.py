@@ -85,15 +85,23 @@ class Metrics:
 
     @property
     def elapsed_s(self) -> float:
-        """Wall time spent processing frames, excluding startup."""
+        """Wall time since the first frame was processed, excluding startup."""
         if self._started is None:
             return 0.0
         return time.perf_counter() - self._started
 
     @property
     def throughput(self) -> float:
-        """Mean frames per second across the whole run, excluding startup."""
-        return self.frames / self.elapsed_s if self.elapsed_s > 0 else 0.0
+        """Mean frames per second across the run, excluding startup.
+
+        Divides by intervals, not by frames. The clock starts when the first
+        frame finishes, so N frames span only N-1 intervals; dividing by N
+        would inflate the rate - negligibly over a long run, by 25% over five
+        frames. Matches the convention `fps` already uses.
+        """
+        if self.frames < 2 or self.elapsed_s <= 0:
+            return 0.0
+        return (self.frames - 1) / self.elapsed_s
 
     def summary(self) -> str:
         return (
