@@ -22,7 +22,27 @@ python scripts/check_camera.py                 # confirm the device opens
 python -m motion_tracker --flip                # mirrored, as a front-facing camera should be
 python -m motion_tracker --flip --mask         # plus the motion mask, to tune the gate by eye
 python -m motion_tracker --flip --no-gate      # detect every frame
+python -m motion_tracker --flip --color track  # a colour per track id, not per state
 ```
+
+### What you see on screen
+
+A **green box** means the track is confirmed — the system has seen it for
+`min_hits` consecutive frames and is committed to it. **Amber** means tentative:
+detected, but not yet trusted enough to count as a real subject. Confirmed boxes
+also get thickened corners so they stay readable against a busy background.
+
+Each caption reads `#id class confidence dwell`, so `#7 person 0.82 4.1s` is
+track 7, classified as a person at 82% confidence, in frame for 4.1 seconds.
+Classification is per-track and comes from the detector's COCO classes;
+`detect.classes` in `config.yaml` whitelists person, bicycle, car, motorcycle,
+bus, truck, cat and dog. Widen or narrow that list to change what is tracked.
+
+The thin green line trailing each subject is its path, and captions stack
+downward when subjects stand close enough for their labels to collide.
+
+`--color track` switches to a distinct hue per track id instead, which is easier
+to follow when several subjects cross paths and you need to see which is which.
 
 `q` or `esc` quits, but only while the video window has focus; `ctrl-c` in the
 terminal works either way and still prints the run summary.
@@ -179,7 +199,7 @@ for your setup.
 ## Tests
 
 ```bash
-pytest              # 43 unit tests, no model weights needed
+pytest              # 53 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

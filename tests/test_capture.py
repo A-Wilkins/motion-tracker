@@ -1,3 +1,5 @@
+import time
+
 import cv2
 import numpy as np
 import pytest
@@ -30,7 +32,10 @@ def _write_clip(path, frames=12, size=(160, 120)):
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, size)
     assert writer.isOpened()
     for i in range(frames):
-        writer.write(np.full((size[1], size[0], 3), 10 + i * 18, dtype=np.uint8))
+        # Step scaled to the frame count so brightness stays inside uint8
+        # while remaining strictly increasing.
+        level = 10 + round(i * 240 / max(1, frames - 1))
+        writer.write(np.full((size[1], size[0], 3), level, dtype=np.uint8))
     writer.release()
     return frames
 
@@ -79,3 +84,38 @@ def test_flip_mirrors_frames_at_capture(tmp_path):
 
     assert left_is_brighter(flip=False), "unflipped frame lost its left-side band"
     assert not left_is_brighter(flip=True), "flip did not mirror the frame"
+
+
+def test_recorded_timestamps_follow_video_time_not_decode_time(tmp_path):
+    """Regression: the decoder runs ahead of the consumer, so wall-clock
+    timestamps collapsed many frames into one instant and every dwell read
+    as 0.0s. Recorded sources must use the video's presentation time."""
+    path = tmp_path / "clip.mp4"
+    frames = _write_clip(path, frames=60)          # 60 frames at 30fps = ~2s
+
+    with VideoSource(CaptureConfig(source=str(path))) as source:
+        captured = list(source)
+
+    assert len(captured) == frames
+    span = captured[-1].timestamp - captured[0].timestamp
+    assert 1.8 < span < 2.2, f"video time span was {span:.3f}s, expected ~2s"
+
+    # Monotonic and roughly evenly spaced, as video time should be.
+    stamps = [f.timestamp for f in captured]
+    assert stamps == sorted(stamps)
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert max(gaps) < 0.1, f"largest gap {max(gaps):.3f}s is not frame-paced"
+
+
+def test_live_timestamps_use_the_wall_clock(tmp_path):
+    """A live source is timed by when frames actually arrived."""
+    path = tmp_path / "clip.mp4"
+    _write_clip(path, frames=8)
+    cfg = CaptureConfig(source=str(path), drop_stale=True)  # force live policy
+
+    before = time.monotonic()
+    with VideoSource(cfg) as source:
+        first = next(iter(source))
+    after = time.monotonic()
+
+    assert before <= first.timestamp <= after

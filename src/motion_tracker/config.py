@@ -59,6 +59,9 @@ class DisplayConfig:
     enabled: bool = True
     show_motion_mask: bool = False
     trail_length: int = 48
+    # "state": green when confirmed, amber while tentative.
+    # "track": a distinct hue per track id, for telling subjects apart.
+    color_mode: str = "state"
 
 
 @dataclass

@@ -26,6 +26,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-gate", action="store_true", help="disable the motion gate")
     parser.add_argument("--mask", action="store_true", help="overlay the motion mask")
     parser.add_argument("--flip", action="store_true", help="mirror the feed (front-facing camera)")
+    parser.add_argument(
+        "--color", choices=("state", "track"), default=None,
+        help="box colour: 'state' green when confirmed, 'track' a hue per id",
+    )
     parser.add_argument("--max-frames", type=int, help="stop after N frames (for benchmarking)")
     return parser.parse_args(argv)
 
@@ -45,6 +49,8 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.display.show_motion_mask = True
     if args.flip:
         cfg.capture.flip = True
+    if args.color:
+        cfg.display.color_mode = args.color
     return cfg
 
 
@@ -79,7 +85,9 @@ def main(argv: list[str] | None = None) -> int:
                     if cfg.display.show_motion_mask:
                         canvas = draw_motion_mask(canvas, snapshot.motion.mask)
                     canvas = draw_frame_bounds(canvas, cfg.track.edge_margin)
-                    canvas = draw_tracks(canvas, snapshot.tracks)
+                    canvas = draw_tracks(
+                        canvas, snapshot.tracks, color_mode=cfg.display.color_mode,
+                    )
                     canvas = draw_hud(canvas, pipeline.hud_lines(snapshot))
                     cv2.imshow(WINDOW, canvas)
                     if cv2.waitKey(1) & 0xFF in (ord("q"), 27):

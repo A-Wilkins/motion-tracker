@@ -52,6 +52,7 @@ class VideoSource:
         self._thread: threading.Thread | None = None
         self._capture: cv2.VideoCapture | None = None
         self._probe: Frame | None = None
+        self._source_fps = 0.0
         self._frames_read = 0
         self._frames_dropped = 0
         self._error: BaseException | None = None
@@ -83,7 +84,8 @@ class VideoSource:
                 f"opened video source {source!r} but the first read failed; the "
                 "device may be in use by another application."
             )
-        self._probe = Frame(0, time.monotonic(), self._orient(image))
+        self._source_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        self._probe = Frame(0, self._timestamp(), self._orient(image))
         self._frames_read = 1
 
         self._thread = threading.Thread(target=self._pump, name="capture", daemon=True)
@@ -121,7 +123,7 @@ class VideoSource:
                     # End of file, or a transiently unhappy device.
                     self._stop.set()
                     break
-                frame = Frame(self._frames_read, time.monotonic(), self._orient(image))
+                frame = Frame(self._frames_read, self._timestamp(), self._orient(image))
                 self._frames_read += 1
                 self._offer(frame)
         except BaseException as exc:  # surfaced to the consumer thread
@@ -130,6 +132,23 @@ class VideoSource:
 
     def _orient(self, image: np.ndarray) -> np.ndarray:
         return cv2.flip(image, 1) if self._cfg.flip else image
+
+    def _timestamp(self) -> float:
+        """Seconds for the frame just read.
+
+        Live sources are timed by the wall clock. Recorded sources must use
+        the video's own presentation time: the decoder runs ahead of the
+        consumer, so wall-clock timestamps would collapse dozens of frames
+        into the same instant and report every dwell as zero.
+        """
+        if self._drop_stale:
+            return time.monotonic()
+        cap = self._capture
+        if cap is not None:
+            position = cap.get(cv2.CAP_PROP_POS_MSEC)
+            if position and position > 0:
+                return position / 1000.0
+        return self._frames_read / (self._source_fps or 30.0)
 
     def _offer(self, frame: Frame) -> None:
         """Enqueue under the configured backpressure policy."""

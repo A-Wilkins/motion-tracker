@@ -35,3 +35,4 @@ display:
   enabled: true
   show_motion_mask: false
   trail_length: 48
+  color_mode: state    # state = green when confirmed / amber when tentative; track = hue per id
