@@ -160,9 +160,39 @@ def test_labels_stay_inside_the_canvas_when_stacked():
     from motion_tracker.draw import _label
 
     placed = []
-    for i in range(12):                     # more labels than vertical room
+    for i in range(40):                     # far more labels than vertical room
         _label(canvas(), f"#{i} person", (W - 40, H - 20), (0, 255, 0), placed)
 
     for x1, y1, x2, y2 in placed:
         assert x1 >= 0 and y1 >= 0
         assert x2 <= W and y2 <= H, f"label ({x1},{y1},{x2},{y2}) left the canvas"
+
+
+def test_labels_anchored_at_the_bottom_edge_stack_upward():
+    """Regression: once stacking ran out of room below it reset to the original
+    position without rechecking, dropping a caption straight onto another. The
+    previous test only asserted bounds, so it never caught this."""
+    from motion_tracker.draw import _label, _overlaps
+
+    placed = []
+    for i in range(6):
+        _label(canvas(), f"#{i} person 0.80 1.2s", (40, H - 12), (0, 255, 0), placed)
+
+    assert len(placed) == 6
+    for i, a in enumerate(placed):
+        for b in placed[i + 1:]:
+            assert not _overlaps(a, b), f"bottom-anchored labels {a} and {b} collide"
+    assert all(y2 <= H for _, _, _, y2 in placed)
+
+
+def test_crowded_frame_minimises_rather_than_abandons_placement():
+    """When there is genuinely no free slot, labels must stay in bounds and
+    overlap as little as possible rather than piling onto one spot."""
+    from motion_tracker.draw import _label
+
+    placed = []
+    for i in range(60):
+        _label(canvas(), f"#{i} person 0.80", (40, H // 2), (0, 255, 0), placed)
+
+    assert all(0 <= y1 and y2 <= H for _, y1, _, y2 in placed)
+    assert len({top for _, top, _, _ in placed}) > 10, "labels collapsed onto few rows"

@@ -99,33 +99,75 @@ def _label(
     """Draw text in a filled box, kept inside the frame and off other labels.
 
     Adjacent subjects produce adjacent boxes, so captions collide and overwrite
-    each other. Each label is nudged down past any already drawn, which keeps
-    every one readable when several people stand together.
+    each other. Each caption is moved to the nearest free slot above or below
+    the ones already drawn, which keeps every one readable when several people
+    stand together.
     """
     x, y = origin
     (tw, th), baseline = cv2.getTextSize(text, _FONT, 0.45, 1)
     box_h = th + baseline + 4
     box_w = tw + 6
 
-    top = y - box_h
-    if top < 0:  # box would run off the top, so drop it inside the bbox
-        top = y
     x = max(0, min(x, image.shape[1] - box_w))
+    preferred = y - box_h
+    if preferred < 0:  # box would run off the top, so drop it inside the bbox
+        preferred = y
 
-    for _ in range(len(placed or ())):
-        rect = (x, top, x + box_w, top + box_h)
-        clash = next((r for r in (placed or ()) if _overlaps(rect, r)), None)
-        if clash is None:
-            break
-        top = clash[3] + 2
-        if top + box_h > image.shape[0]:   # ran out of room below
-            top = max(0, y - box_h)
-            break
+    top = _free_slot(x, preferred, box_w, box_h, placed or (), image.shape[0])
 
     if placed is not None:
         placed.append((x, top, x + box_w, top + box_h))
     cv2.rectangle(image, (x, top), (x + box_w, top + box_h), color, cv2.FILLED)
     cv2.putText(image, text, (x + 3, top + th + 2), _FONT, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
+
+
+def _free_slot(
+    x: int,
+    preferred: int,
+    box_w: int,
+    box_h: int,
+    placed,
+    height: int,
+) -> int:
+    """Nearest vertical position to `preferred` that is in frame and unoccupied.
+
+    Candidates are the preferred spot plus the slots flush above and below each
+    label already drawn. Stacking only downwards strands captions anchored near
+    the bottom edge, where there is no room left; searching both directions and
+    ranking by distance keeps them near their subject. If the frame is too
+    crowded for any free slot, the least-overlapping candidate wins - staying
+    in bounds matters more than never touching.
+    """
+    limit = max(0, height - box_h)
+    candidates = [preferred]
+    for rect in placed:
+        candidates.append(rect[3] + 2)           # flush below
+        candidates.append(rect[1] - box_h - 2)   # flush above
+
+    seen: set[int] = set()
+    ordered = []
+    for top in candidates:
+        top = max(0, min(top, limit))
+        if top not in seen:
+            seen.add(top)
+            ordered.append(top)
+    ordered.sort(key=lambda top: abs(top - preferred))
+
+    best, best_cost = ordered[0], None
+    for top in ordered:
+        rect = (x, top, x + box_w, top + box_h)
+        cost = sum(_overlap_area(rect, other) for other in placed)
+        if cost == 0:
+            return top
+        if best_cost is None or cost < best_cost:
+            best, best_cost = top, cost
+    return best
+
+
+def _overlap_area(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
+    wide = min(a[2], b[2]) - max(a[0], b[0])
+    tall = min(a[3], b[3]) - max(a[1], b[1])
+    return wide * tall if wide > 0 and tall > 0 else 0
 
 
 def _overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
