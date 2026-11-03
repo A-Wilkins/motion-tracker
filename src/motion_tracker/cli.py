@@ -8,9 +8,10 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from .config import Config
-from .draw import draw_frame_bounds, draw_hud, draw_motion_mask, draw_tracks
+from .draw import Recorder, draw_frame_bounds, draw_hud, draw_motion_mask, draw_tracks
 from .pipeline import Pipeline
 from .track import TrackState
 
@@ -31,6 +32,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="box colour: 'state' green when confirmed, 'track' a hue per id",
     )
     parser.add_argument("--max-frames", type=int, help="stop after N frames (for benchmarking)")
+    parser.add_argument("--record", metavar="PATH", help="write the annotated view to an mp4")
+    parser.add_argument("--no-hud", action="store_true", help="omit the stats panel from the view")
     return parser.parse_args(argv)
 
 
@@ -66,10 +69,25 @@ def main(argv: list[str] | None = None) -> int:
         cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WINDOW, cfg.capture.width, cfg.capture.height)
 
+    recorder = Recorder(args.record) if args.record else None
+
+    def render(snapshot) -> "np.ndarray":
+        canvas = snapshot.image.copy()
+        if cfg.display.show_motion_mask:
+            canvas = draw_motion_mask(canvas, snapshot.motion.mask)
+        canvas = draw_frame_bounds(canvas, cfg.track.edge_margin)
+        canvas = draw_tracks(canvas, snapshot.tracks, color_mode=cfg.display.color_mode)
+        if not args.no_hud:
+            canvas = draw_hud(canvas, pipeline.hud_lines(snapshot))
+        return canvas
+
     try:
         with Pipeline(cfg) as pipeline:
             print(f"device={pipeline.detector.device} weights={cfg.detect.weights}", file=sys.stderr)
-            print("q or esc to quit", file=sys.stderr)
+            if show:
+                print("q or esc to quit", file=sys.stderr)
+            if recorder:
+                print(f"recording to {recorder.path}", file=sys.stderr)
 
             for snapshot in pipeline.run():
                 for track in snapshot.closed:
@@ -80,18 +98,14 @@ def main(argv: list[str] | None = None) -> int:
                         flush=True,
                     )
 
-                if show:
-                    canvas = snapshot.image.copy()
-                    if cfg.display.show_motion_mask:
-                        canvas = draw_motion_mask(canvas, snapshot.motion.mask)
-                    canvas = draw_frame_bounds(canvas, cfg.track.edge_margin)
-                    canvas = draw_tracks(
-                        canvas, snapshot.tracks, color_mode=cfg.display.color_mode,
-                    )
-                    canvas = draw_hud(canvas, pipeline.hud_lines(snapshot))
-                    cv2.imshow(WINDOW, canvas)
-                    if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
-                        break
+                if show or recorder:
+                    canvas = render(snapshot)
+                    if recorder:
+                        recorder.write(canvas)
+                    if show:
+                        cv2.imshow(WINDOW, canvas)
+                        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                            break
 
                 if args.max_frames and pipeline.metrics.frames >= args.max_frames:
                     break
@@ -100,6 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
     finally:
+        if recorder is not None:
+            recorder.close()
+            print(f"wrote {recorder.frames} frames to {recorder.path}", file=sys.stderr)
         if show:
             cv2.destroyAllWindows()
     return 0

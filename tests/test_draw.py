@@ -7,6 +7,7 @@ time someone runs it with a display attached.
 
 from collections import deque
 
+import cv2
 import numpy as np
 
 from motion_tracker.draw import (
@@ -196,3 +197,47 @@ def test_crowded_frame_minimises_rather_than_abandons_placement():
 
     assert all(0 <= y1 and y2 <= H for _, y1, _, y2 in placed)
     assert len({top for _, top, _, _ in placed}) > 10, "labels collapsed onto few rows"
+
+
+def test_recorder_writes_a_browser_playable_h264_file(tmp_path):
+    """mp4v produces a valid file that Safari refuses to play, so the codec
+    matters: the output must carry an avcC (H.264) box."""
+    from motion_tracker.draw import Recorder
+
+    path = tmp_path / "out.mp4"
+    with Recorder(str(path), fps=30.0) as rec:
+        for i in range(10):
+            frame = canvas()
+            frame[:, : 40 + i * 4] = 220          # something that actually changes
+            rec.write(frame)
+
+    assert rec.frames == 10
+    assert path.exists() and path.stat().st_size > 0
+    assert b"avcC" in path.read_bytes(), "output is not H.264"
+
+
+def test_recorder_matches_the_real_frame_size(tmp_path):
+    """The writer opens on the first frame, because a camera is free to ignore
+    the resolution it was asked for."""
+    from motion_tracker.draw import Recorder
+
+    path = tmp_path / "sized.mp4"
+    with Recorder(str(path)) as rec:
+        rec.write(np.zeros((180, 320, 3), dtype=np.uint8))
+        rec.write(np.zeros((180, 320, 3), dtype=np.uint8))
+
+    cap = cv2.VideoCapture(str(path))
+    try:
+        assert int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) == 320
+        assert int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) == 180
+    finally:
+        cap.release()
+
+
+def test_recorder_close_is_idempotent(tmp_path):
+    from motion_tracker.draw import Recorder
+
+    rec = Recorder(str(tmp_path / "x.mp4"))
+    rec.write(canvas())
+    rec.close()
+    rec.close()          # must not raise

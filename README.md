@@ -23,6 +23,7 @@ python -m motion_tracker --flip                # mirrored, as a front-facing cam
 python -m motion_tracker --flip --mask         # plus the motion mask, to tune the gate by eye
 python -m motion_tracker --flip --no-gate      # detect every frame
 python -m motion_tracker --flip --color track  # a colour per track id, not per state
+python -m motion_tracker --flip --record out.mp4   # save the annotated view as H.264
 ```
 
 ### What you see on screen
@@ -199,7 +200,7 @@ for your setup.
 ## Tests
 
 ```bash
-pytest              # 55 unit tests, no model weights needed
+pytest              # 58 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

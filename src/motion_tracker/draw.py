@@ -209,6 +209,44 @@ def draw_motion_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(image, 1.0, tint, 0.35, 0)
 
 
+class Recorder:
+    """Write annotated frames to an H.264 MP4.
+
+    avc1 is the one fourcc in OpenCV's bundled FFmpeg that browsers will play;
+    mp4v writes a valid file that Safari refuses. Opened lazily on the first
+    frame so the writer matches the real frame size rather than the configured
+    one, which a camera is free to ignore.
+    """
+
+    def __init__(self, path: str, fps: float = 30.0) -> None:
+        self.path = path
+        self._fps = fps if fps > 0 else 30.0
+        self._writer: cv2.VideoWriter | None = None
+        self.frames = 0
+
+    def write(self, image: np.ndarray) -> None:
+        if self._writer is None:
+            height, width = image.shape[:2]
+            self._writer = cv2.VideoWriter(
+                self.path, cv2.VideoWriter_fourcc(*"avc1"), self._fps, (width, height),
+            )
+            if not self._writer.isOpened():
+                raise RuntimeError(f"could not open {self.path} for writing")
+        self._writer.write(image)
+        self.frames += 1
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.release()
+            self._writer = None
+
+    def __enter__(self) -> "Recorder":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
 def draw_frame_bounds(image: np.ndarray, margin: int) -> np.ndarray:
     """Outline the exit margin, i.e. the edge band that means 'left the scene'."""
     h, w = image.shape[:2]
