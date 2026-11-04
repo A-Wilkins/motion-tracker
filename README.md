@@ -206,7 +206,7 @@ for your setup.
 ## Tests
 
 ```bash
-pytest              # 66 unit tests, no model weights needed
+pytest              # 64 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 
