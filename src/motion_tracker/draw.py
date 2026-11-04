@@ -7,6 +7,7 @@ without dragging any drawing code along.
 from __future__ import annotations
 
 import colorsys
+import pathlib
 
 import cv2
 import numpy as np
@@ -44,6 +45,8 @@ def draw_tracks(
     tracks: list[Track],
     show_trails: bool = True,
     color_mode: str = "state",
+    show_stale: bool = False,
+    min_label_frac: float = 0.025,
 ) -> np.ndarray:
     """Outline each track.
 
@@ -51,9 +54,21 @@ def draw_tracks(
     amber, which answers "is this thing actually being tracked?" at a glance.
     `color_mode="track"` gives every id its own hue instead, which is what you
     want when several subjects are in frame and you need to tell them apart.
+
+    Tracks not seen on this frame are skipped unless `show_stale`. A track
+    survives a gap of up to `max_age` frames so identity can outlive a brief
+    occlusion, but drawing its last known box during that gap puts a rectangle
+    on empty road - the overlay would be claiming to see something it cannot.
+
+    Captions are dropped for boxes narrower than `min_label_frac` of the frame.
+    In a busy scene the distant subjects are too small for a legible label and
+    their captions bury the ones that matter. The box is still drawn.
     """
     placed: list[tuple[int, int, int, int]] = []
+    label_floor = min_label_frac * image.shape[1]
     for track in tracks:
+        if not show_stale and not track.is_visible:
+            continue
         confirmed = track.state is TrackState.CONFIRMED
         if color_mode == "track":
             color = color_for_id(track.track_id) if confirmed else _DIM
@@ -71,10 +86,11 @@ def draw_tracks(
             cv2.polylines(image, [points], False, color, 1, cv2.LINE_AA)
             cv2.circle(image, track.centroid, 3, color, -1, cv2.LINE_AA)
 
-        caption = f"#{track.track_id} {track.label} {track.confidence:.2f}"
-        if confirmed:
-            caption += f" {track.dwell_s:.1f}s"
-        _label(image, caption, (x1, y1), color, placed)
+        if (x2 - x1) >= label_floor:
+            caption = f"#{track.track_id} {track.label} {track.confidence:.2f}"
+            if confirmed:
+                caption += f" {track.dwell_s:.1f}s"
+            _label(image, caption, (x1, y1), color, placed)
     return image
 
 
@@ -239,12 +255,83 @@ class Recorder:
         if self._writer is not None:
             self._writer.release()
             self._writer = None
+            _faststart(self.path)
 
     def __enter__(self) -> "Recorder":
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+def _faststart(path: str) -> bool:
+    """Move the moov atom ahead of mdat so a browser can start playing at once.
+
+    OpenCV writes moov last, which means a player must fetch the end of the
+    file before it can decode the beginning - an extra round trip, and enough
+    to stall an autoplaying clip. Relocating it means every chunk offset in
+    stco/co64 shifts by the size of moov, so they are patched to match.
+
+    Returns True if the file was rewritten. Any surprise leaves the original
+    untouched: a playable file with a slow start beats a corrupted one.
+    """
+    try:
+        data = pathlib.Path(path).read_bytes()
+    except OSError:
+        return False
+
+    atoms, offset = [], 0
+    while offset + 8 <= len(data):
+        size = int.from_bytes(data[offset:offset + 4], "big")
+        kind = data[offset + 4:offset + 8]
+        if size < 8 or offset + size > len(data):
+            return False
+        atoms.append((kind, offset, size))
+        offset += size
+    if offset != len(data):
+        return False
+
+    order = [k for k, _, _ in atoms]
+    if b"moov" not in order or b"mdat" not in order:
+        return False
+    if order.index(b"moov") < order.index(b"mdat"):
+        return True                      # already fast-start
+
+    moov = next(data[o:o + n] for k, o, n in atoms if k == b"moov")
+    shifted = _shift_chunk_offsets(moov, len(moov))
+    if shifted is None:
+        return False
+
+    rest = b"".join(data[o:o + n] for k, o, n in atoms if k != b"moov")
+    head_len = next(n for k, _, n in atoms if k == b"ftyp")
+    pathlib.Path(path).write_bytes(rest[:head_len] + shifted + rest[head_len:])
+    return True
+
+
+def _shift_chunk_offsets(moov: bytes, delta: int) -> bytes | None:
+    """Add `delta` to every offset in the moov atom's stco and co64 tables."""
+    buf = bytearray(moov)
+    for marker, width in ((b"stco", 4), (b"co64", 8)):
+        start = 0
+        while True:
+            at = buf.find(marker, start)
+            if at == -1:
+                break
+            start = at + 4
+            count_at = at + 8                      # skip version and flags
+            if count_at + 4 > len(buf):
+                return None
+            count = int.from_bytes(buf[count_at:count_at + 4], "big")
+            table = count_at + 4
+            if table + count * width > len(buf):
+                return None
+            for i in range(count):
+                pos = table + i * width
+                value = int.from_bytes(buf[pos:pos + width], "big") + delta
+                if value >= 1 << (width * 8):
+                    return None
+                buf[pos:pos + width] = value.to_bytes(width, "big")
+    return bytes(buf)
 
 
 def draw_frame_bounds(image: np.ndarray, margin: int) -> np.ndarray:

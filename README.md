@@ -101,6 +101,12 @@ subject present from the first frame is never missed.
 Boxes are clipped to the frame — tracks cannot describe anything the camera
 cannot see.
 
+Boxes are drawn only for tracks seen on the current frame. A track survives a
+gap of up to `max_age` so identity can outlive a brief occlusion, but painting
+its last known box during that gap would put a rectangle on empty road. On a
+busy scene captions are also dropped for boxes too small to read, since the
+distant subjects would otherwise bury the ones that matter.
+
 **The lifecycle layer is what makes this a system rather than a box-drawer.**
 Per-frame ids are not yet an answer to "what happened", so tracks are promoted
 through explicit states:
@@ -200,7 +206,7 @@ for your setup.
 ## Tests
 
 ```bash
-pytest              # 58 unit tests, no model weights needed
+pytest              # 66 unit tests, no model weights needed
 pytest -m slow      # 4 end-to-end tests against the fixture clip
 ```
 

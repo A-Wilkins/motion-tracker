@@ -241,3 +241,104 @@ def test_recorder_close_is_idempotent(tmp_path):
     rec.write(canvas())
     rec.close()
     rec.close()          # must not raise
+
+
+def _painted(image):
+    """Count pixels that differ from the flat canvas background."""
+    return int((np.abs(image.astype(int) - 40).max(axis=2) > 12).sum())
+
+
+def test_stale_tracks_are_not_drawn():
+    """Regression: a track survives a gap of up to max_age so identity can
+    outlive an occlusion, but drawing its last box during that gap paints a
+    rectangle on empty road and claims to see something that is not there."""
+    stale = track()
+    stale.age = 7                       # not seen on this frame
+
+    out = draw_tracks(canvas(), [stale], show_trails=False)
+    assert _painted(out) == 0, "a track not seen this frame must not be drawn"
+
+    shown = draw_tracks(canvas(), [stale], show_trails=False, show_stale=True)
+    assert _painted(shown) > 0, "show_stale should opt back in"
+
+
+def test_visible_tracks_are_still_drawn():
+    out = draw_tracks(canvas(), [track()], show_trails=False)
+    assert _painted(out) > 0
+
+
+def test_small_boxes_keep_their_outline_but_lose_the_caption():
+    """In a busy scene the distant subjects are too small to label legibly and
+    their captions bury the ones that matter."""
+    tiny = track(xyxy=(100, 100, 108, 130))      # 8px wide of a 640px frame
+    out = draw_tracks(canvas(), [tiny], show_trails=False)
+
+    # the box itself is drawn
+    assert _painted(out) > 0
+    # but nothing is painted in the band a caption would occupy, kept clear of
+    # the box outline's own antialiasing a few rows above y1
+    assert _painted(out[70:94]) == 0, "a caption was drawn for a tiny box"
+
+
+def test_large_boxes_keep_their_caption():
+    big = track(xyxy=(100, 100, 300, 320))
+    out = draw_tracks(canvas(), [big], show_trails=False)
+    assert _painted(out[70:94]) > 0, "a legible box should still be captioned"
+
+
+def _atom_order(path):
+    import struct
+    data = open(path, "rb").read()
+    out, off = [], 0
+    while off + 8 <= len(data):
+        size = struct.unpack(">I", data[off:off + 4])[0]
+        out.append(data[off + 4:off + 8].decode("latin1"))
+        if size < 8:
+            break
+        off += size
+    return out
+
+
+def test_recorded_mp4_is_faststart_and_still_decodes(tmp_path):
+    """OpenCV writes moov last, so a browser must fetch the end of the file
+    before it can start playing. Relocating it shifts every chunk offset, so
+    the real test is that the file still decodes afterwards."""
+    from motion_tracker.draw import Recorder
+
+    path = tmp_path / "fs.mp4"
+    with Recorder(str(path), fps=30.0) as rec:
+        for i in range(24):
+            frame = canvas()
+            frame[:, : 30 + i * 8] = 200
+            rec.write(frame)
+
+    order = _atom_order(path)
+    assert "moov" in order and "mdat" in order
+    assert order.index("moov") < order.index("mdat"), f"not faststart: {order}"
+
+    cap = cv2.VideoCapture(str(path))
+    try:
+        decoded = 0
+        while True:
+            ok, _ = cap.read()
+            if not ok:
+                break
+            decoded += 1
+    finally:
+        cap.release()
+    assert decoded == 24, f"offsets broken: decoded {decoded} of 24 frames"
+
+
+def test_faststart_leaves_a_non_mp4_alone():
+    """Anything unexpected must leave the file untouched rather than corrupt it."""
+    import tempfile, pathlib as pl
+    from motion_tracker.draw import _faststart
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fh:
+        fh.write(b"this is not an mp4 at all")
+        name = fh.name
+    try:
+        assert _faststart(name) is False
+        assert pl.Path(name).read_bytes() == b"this is not an mp4 at all"
+    finally:
+        pl.Path(name).unlink()

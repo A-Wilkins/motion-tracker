@@ -8,6 +8,7 @@ Usage: python scripts/make_demo_media.py [outdir]
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,9 +20,15 @@ from motion_tracker.draw import (
 )
 from motion_tracker.pipeline import Pipeline
 
-CLIP = Path("assets/test_clip.mp4")
+# Source footage. Defaults to the generated fixture; pass a path to use real
+# footage instead, which is what the published demo uses.
+CLIP = Path(os.environ.get("DEMO_CLIP", "assets/test_clip.mp4"))
+START = int(os.environ.get("DEMO_START", "0"))        # first frame to record
+LENGTH = int(os.environ.get("DEMO_FRAMES", "0")) or None
+IMGSZ = int(os.environ.get("DEMO_IMGSZ", "0")) or None
+CONF = float(os.environ.get("DEMO_CONF", "0") or 0) or None
 WEB_WIDTH = 960                      # plenty for a web page, roughly half the bytes
-STILLS = {62: "overlay", 38: "early"}
+STILLS = [s for s in os.environ.get("DEMO_STILLS", "62:overlay,38:early").split(",") if s]
 
 
 def render(pipeline, snapshot, cfg, mask=False):
@@ -54,19 +61,30 @@ def main() -> int:
     cfg = Config.load("config.yaml")
     cfg.capture.source = str(CLIP)
     cfg.display.enabled = False
+    if IMGSZ:
+        cfg.detect.imgsz = IMGSZ
+    if CONF:
+        cfg.detect.conf = CONF
 
+    stills_at = {int(k): v for k, v in (s.split(":") for s in STILLS)}
+    last = START + LENGTH if LENGTH else None
     video = outdir / "motion-tracker-demo.mp4"
     stills: dict[str, object] = {}
 
     with Pipeline(cfg) as pipeline, Recorder(str(video)) as recorder:
         for snapshot in pipeline.run():
+            index = snapshot.frame.index
+            if index < START:
+                continue              # let the gate and tracker settle first
+            if last is not None and index >= last:
+                break
             frame = to_web(render(pipeline, snapshot, cfg))
             recorder.write(frame)
-            name = STILLS.get(snapshot.frame.index)
+            name = stills_at.get(index)
             if name:
                 stills[name] = frame.copy()
-            if snapshot.frame.index == 62:
-                stills["mask"] = to_web(render(pipeline, snapshot, cfg, mask=True))
+                if name == "overlay":
+                    stills["mask"] = to_web(render(pipeline, snapshot, cfg, mask=True))
 
     print(f"wrote {video} ({video.stat().st_size / 1024:.0f} KB, {recorder.frames} frames)")
 
